@@ -1,13 +1,17 @@
 from apscheduler.schedulers.background import BackgroundScheduler
-from app.whatsapp_handler import send_whatsapp_message
+from datetime import datetime, timedelta
+from app.email_handler import check_task_status
 
 scheduler = BackgroundScheduler()
 scheduler.start()
 
-def schedule_followup(task):
-    if "assignee" in task:
-        scheduler.add_job(
-            lambda: send_whatsapp_message(task["assignee"], f"Reminder for task: {task['task_id']}"),
-            trigger="interval",
-            hours=48
-        )
+def followup_task(task):
+    status = check_task_status(task)
+    if status != 'completed':
+        # Logic to send follow-up email or notification
+        print(f"Following up on task: {task}")
+
+def schedule_followup(task, delay_hours=24):
+    run_time = datetime.now() + timedelta(hours=delay_hours)
+    scheduler.add_job(followup_task, 'date', run_date=run_time, args=[task])
+    print(f"Scheduled follow-up for task: {task} at {run_time}")
