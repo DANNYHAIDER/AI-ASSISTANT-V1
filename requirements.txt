@@ -3,3 +3,5 @@ openai
 requests
 apscheduler
 uvicorn
+python-dotenv
+
