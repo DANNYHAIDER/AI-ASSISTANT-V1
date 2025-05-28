@@ -1,5 +1,23 @@
-GMAIL_API_KEY = "your_gmail_api_key"
-BASECAMP_API_KEY = "your_basecamp_api_key"
-SAP_API_KEY = "your_sap_api_key"
-OPENAI_API_KEY = "your_openai_api_key"
-TWILIO_API_KEY = "your_twilio_api_key"
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
+GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI")
+
+BASECAMP_CLIENT_ID = os.getenv("BASECAMP_CLIENT_ID")
+BASECAMP_CLIENT_SECRET = os.getenv("BASECAMP_CLIENT_SECRET")
+BASECAMP_REDIRECT_URI = os.getenv("BASECAMP_REDIRECT_URI")
+BASECAMP_PROJECT_ID = os.getenv("BASECAMP_PROJECT_ID")
+BASECAMP_TODO_LIST_ID = os.getenv("BASECAMP_TODO_LIST_ID")
+
+SAP_API_BASE_URL = os.getenv("SAP_API_BASE_URL")
+SAP_API_KEY = os.getenv("SAP_API_KEY")
+
+WHATSAPP_API_URL = os.getenv("WHATSAPP_API_URL")
+WHATSAPP_API_TOKEN = os.getenv("WHATSAPP_API_TOKEN")
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
