@@ -4,4 +4,3 @@ requests
 apscheduler
 uvicorn
 python-dotenv
-
