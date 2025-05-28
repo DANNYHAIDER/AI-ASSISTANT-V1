@@ -1,104 +1,103 @@
 import os
-import requests
 import base64
-import openai
-from urllib.parse import urlencode
-from app.followup_scheduler import schedule_followup
+import json
+import requests
+from google.auth.transport.requests import Request
+from google_auth_oauthlib.flow import Flow
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from app.ai_engine import extract_tasks_from_text
 from app.basecamp_handler import assign_task_to_basecamp
-from app.sap_handler import assign_task_to_sap
 
-GMAIL_CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
-GMAIL_CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
-GMAIL_REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI")
-GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.send"
+# Set your variables from environment
+CLIENT_ID = os.getenv("GMAIL_CLIENT_ID")
+CLIENT_SECRET = os.getenv("GMAIL_CLIENT_SECRET")
+REDIRECT_URI = os.getenv("GMAIL_REDIRECT_URI")
 
-GMAIL_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GMAIL_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GMAIL_API_URL = "https://gmail.googleapis.com/gmail/v1"
-
-openai.api_key = os.getenv("OPENAI_API_KEY")
-
-gmail_token = None
+SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.send']
+TOKEN_FILE = 'token.json'
 
 def start_gmail_oauth_flow():
-    params = urlencode({
-        "client_id": GMAIL_CLIENT_ID,
-        "redirect_uri": GMAIL_REDIRECT_URI,
-        "response_type": "code",
-        "scope": GMAIL_SCOPE,
-        "access_type": "offline",
-        "prompt": "consent"
-    })
-    return {"auth_url": f"{GMAIL_AUTH_URL}?{params}"}
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "redirect_uris": [REDIRECT_URI],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token"
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI
+    )
+    auth_url, _ = flow.authorization_url(prompt='consent')
+    return {"auth_url": auth_url}
 
-def handle_gmail_oauth_callback(code):
-    global gmail_token
-    response = requests.post(GMAIL_TOKEN_URL, data={
-        "code": code,
-        "client_id": GMAIL_CLIENT_ID,
-        "client_secret": GMAIL_CLIENT_SECRET,
-        "redirect_uri": GMAIL_REDIRECT_URI,
-        "grant_type": "authorization_code"
-    })
-    gmail_token = response.json().get("access_token")
-    return {"access_token": gmail_token}
+def handle_gmail_oauth_callback(code: str):
+    flow = Flow.from_client_config(
+        {
+            "web": {
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+                "redirect_uris": [REDIRECT_URI],
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token"
+            }
+        },
+        scopes=SCOPES,
+        redirect_uri=REDIRECT_URI
+    )
+    flow.fetch_token(code=code)
+    creds = flow.credentials
+    with open(TOKEN_FILE, 'w') as token:
+        token.write(creds.to_json())
+    return {"status": "authorized"}
+
+def get_gmail_service():
+    creds = None
+    if os.path.exists(TOKEN_FILE):
+        creds = Credentials.from_authorized_user_file(TOKEN_FILE, SCOPES)
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+    return build('gmail', 'v1', credentials=creds)
 
 def read_recent_emails():
-    headers = {"Authorization": f"Bearer {gmail_token}"}
-    messages_resp = requests.get(f"{GMAIL_API_URL}/users/me/messages", headers=headers)
-    message_ids = [m['id'] for m in messages_resp.json().get("messages", [])[:5]]
-    emails = []
-    for mid in message_ids:
-        detail_resp = requests.get(f"{GMAIL_API_URL}/users/me/messages/{mid}?format=full", headers=headers)
-        payload = detail_resp.json()
-        snippet = payload.get("snippet", "")
-        email_data = {
-            "id": mid,
-            "snippet": snippet,
-            "payload": payload
-        }
-        emails.append(email_data)
-    return {"emails": emails}
+    service = get_gmail_service()
+    results = service.users().messages().list(userId='me', maxResults=5).execute()
+    messages = results.get('messages', [])
+
+    email_data = []
+    for msg in messages:
+        msg_detail = service.users().messages().get(userId='me', id=msg['id']).execute()
+        snippet = msg_detail.get('snippet')
+        headers = msg_detail['payload']['headers']
+        subject = next((h['value'] for h in headers if h['name'] == 'Subject'), '')
+        email_data.append({'subject': subject, 'snippet': snippet})
+    return email_data
 
 def send_gmail_reply(to, subject, body):
-    headers = {"Authorization": f"Bearer {gmail_token}", "Content-Type": "application/json"}
-    message = f"From: me\nTo: {to}\nSubject: {subject}\n\n{body}"
-    message_bytes = base64.urlsafe_b64encode(message.encode("utf-8")).decode("utf-8")
-    payload = {"raw": message_bytes}
-    response = requests.post(f"{GMAIL_API_URL}/users/me/messages/send", headers=headers, json=payload)
-    return response.json()
+    service = get_gmail_service()
+    message = f"To: {to}\r\nSubject: Re: {subject}\r\n\r\n{body}"
+    raw_message = base64.urlsafe_b64encode(message.encode('utf-8')).decode('utf-8')
+    send_message = {'raw': raw_message}
+    return service.users().messages().send(userId='me', body=send_message).execute()
 
 def process_and_assign_gmail_tasks():
-    headers = {"Authorization": f"Bearer {gmail_token}"}
-    messages_resp = requests.get(f"{GMAIL_API_URL}/users/me/messages", headers=headers)
-    message_ids = [m['id'] for m in messages_resp.json().get("messages", [])[:5]]
-    auto_replies = []
-    for mid in message_ids:
-        detail_resp = requests.get(f"{GMAIL_API_URL}/users/me/messages/{mid}?format=full", headers=headers)
-        payload = detail_resp.json()
-        snippet = payload.get("snippet", "")
-        prompt = f"Extract a task and write a professional reply to this email:\n\n{snippet}"
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant that extracts tasks and writes email replies."},
-                {"role": "user", "content": prompt}
-            ]
-        )
-        reply_text = response.choices[0].message.content
-        auto_replies.append({"email_id": mid, "reply": reply_text})
+    service = get_gmail_service()
+    results = service.users().messages().list(userId='me', maxResults=5).execute()
+    messages = results.get('messages', [])
 
-        # Assign to Basecamp and SAP
-        task_summary = reply_text.split("\n")[0]
-        assign_task_to_basecamp(task_summary)
-        assign_task_to_sap(task_summary)
+    assigned_tasks = []
+    for msg in messages:
+        msg_detail = service.users().messages().get(userId='me', id=msg['id']).execute()
+        snippet = msg_detail.get('snippet')
+        tasks = extract_tasks_from_text(snippet)
+        for task in tasks:
+            result = assign_task_to_basecamp(task)
+            assigned_tasks.append(result)
+    return assigned_tasks
 
-        # Schedule follow-up
-        schedule_followup({"email_id": mid, "task": task_summary})
-
-        # Optionally send reply
-        # send_gmail_reply(parsed_recipient, "Re: Your Task", reply_text)
-
-    return {"auto_replies": auto_replies}
 
 
