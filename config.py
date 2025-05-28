@@ -1,0 +1,5 @@
+GMAIL_API_KEY = "your_gmail_api_key"
+BASECAMP_API_KEY = "your_basecamp_api_key"
+SAP_API_KEY = "your_sap_api_key"
+OPENAI_API_KEY = "your_openai_api_key"
+TWILIO_API_KEY = "your_twilio_api_key"
